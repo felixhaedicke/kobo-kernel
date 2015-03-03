@@ -986,6 +986,10 @@ unknown:
 		 * take such requests too, if that's ever needed:  to work
 		 * in config 0, etc.
 		 */
+		list_for_each_entry(f, &cdev->config->functions, list)
+			if (f->req_match && f->req_match(f, ctrl))
+				goto try_fun_setup;
+		f = NULL;
 		switch (ctrl->bRequestType & USB_RECIP_MASK) {
 		case USB_RECIP_INTERFACE:
 			if (!cdev->config || intf >= MAX_CONFIG_INTERFACES)
@@ -1003,7 +1007,7 @@ unknown:
 				f = NULL;
 			break;
 		}
-
+try_fun_setup:
 		if (f && f->setup)
 			value = f->setup(f, ctrl);
 		else {
