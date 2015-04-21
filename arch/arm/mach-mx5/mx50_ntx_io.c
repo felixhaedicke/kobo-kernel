@@ -274,7 +274,7 @@ static unsigned int FL_table0[100]={
 };
 */	
 static unsigned short FL_table0[100]={
-0x0001,0x0006,0x0007,0x0009,0x000C,0x000D,0x000E,0x000F,0x0011,0x0012,
+0x0006/*0x0001*/,0x0006,0x0007,0x0009,0x000C,0x000D,0x000E,0x000F,0x0011,0x0012,
 0x0014,0x0015,0x0017,0x0018,0x001A,0x001B,0x001C,0x001D,0x001F,0x0020,
 0x0022,0x0023,0x0025,0x0027,0x0028,0x002A,0x002B,0x002D,0x002E,0x0030,
 0x0031,0x0033,0x0035,0x0036,0x0038,0x0039,0x003B,0x003C,0x003E,0x0040,
@@ -286,6 +286,40 @@ static unsigned short FL_table0[100]={
 0x0157,0x015D,0x0163,0x016A,0x0170,0x0176,0x017C,0x0183,0x0189,0x018F
 };
 	
+
+struct front_light_setting {
+    unsigned short fl_r_en;
+    unsigned short freq;
+    unsigned short duty;
+};
+
+static struct front_light_setting FL_table1[100]={
+{0,20000,3}, {0,20000,5}, {0,20000,7}, {0,20000,9}, {0,20000,11},
+{0,20000,13}, {0,20000,15}, {0,20000,17}, {0,20000,19}, {0,20000,21}, 
+{0,20000,23}, {0,20000,25}, {0,20000,27}, {0,20000,30}, {0,20000,33},
+{0,20000,36}, {0,20000,39}, {0,20000,42}, {0,20000,46}, {0,20000,51},
+{0,20000,54}, {0,20000,59}, {0,20000,63}, {0,20000,68}, {0,20000,71},
+{0,20000,74}, {0,20000,87}, {0,20000,99}, {0,20000,112}, {0,20000,124},
+{0,20000,137}, {0,20000,149}, {0,20000,162}, {0,20000,174}, {0,20000,185},
+{0,20000,193}, {0,20000,206}, {0,20000,218}, {0,20000,231}, {0,20000,243}, 
+{0,20000,256}, {1,20000,45}, {1,20000,46}, {1,20000,47}, {1,20000,48}, 
+{1,20000,49}, {1,20000,50}, {1,20000,51}, {1,20000,53}, {1,20000,55},
+{1,20000,56}, {1,20000,58}, {1,20000,60}, {1,20000,63}, {1,20000,65}, 
+{1,20000,68}, {1,20000,70}, {1,20000,75}, {1,20000,78}, {1,20000,80}, 
+{1,20000,85}, {1,20000,88}, {1,20000,90}, {1,20000,95}, {1,20000,100}, 
+{1,20000,105}, {1,20000,110}, {1,20000,115}, {1,20000,120}, {1,20000,125}, 
+{1,20000,130}, {1,20000,135}, {1,20000,140}, {1,20000,145}, {1,20000,150}, 
+{1,20000,155}, {1,20000,160}, {1,20000,170}, {1,20000,180}, {1,20000,190}, 
+{1,20000,200}, {1,20000,210}, {1,20000,220}, {1,20000,230}, {1,20000,240}, 
+{1,20000,250}, {1,20000,260}, {1,20000,270}, {1,20000,280}, {1,20000,290}, 
+{1,20000,300}, {1,20000,310}, {1,20000,320}, {1,20000,330}, {1,20000,340}, 
+{1,20000,350}, {1,20000,360}, {1,20000,370}, {1,20000,380}, {1,20000,400}, 
+};
+
+struct delayed_work FL_off;
+void FL_off_func(struct work_struct *work);
+int FL_suspend(void);
+
 //kay for LED thread
 //static unsigned char LED_conitnuous=0;
 static unsigned char LED_conitnuous=1;
@@ -995,42 +1029,72 @@ static int  ioctlDriver(struct inode *inode, struct file *filp, unsigned int com
 		case CM_FRONT_LIGHT_SET:
 			if(0!=gptHWCFG->m_val.bFrontLight)
 			{
-				if (p) {			
+				if (p) {
+					if(delayed_work_pending(&FL_off)){
+						cancel_delayed_work_sync(&FL_off);
+						printk("FL_off delayed work canceled");
+					}
 					printk ("\nset front light level : %d\n",p);
-					if(p>0 && p<=50)
+					if(p>0 && p<=100)
 					{
-						gpio_direction_output(FL_R_EN,0);
-						msp430_write (0xA7, FL_table0[2*(p-1)]&0xFF00);
-						msp430_write (0xA6, FL_table0[2*(p-1)]<<8);
-						printk("PWMCNT : 0x%04x\n", FL_table0[2*(p-1)]);
-					}else if(p>50 && p<=100){
-						gpio_direction_output(FL_R_EN,1);
-						msp430_write (0xA7, FL_table0[p-1]&0xFF00);
-						msp430_write (0xA6, FL_table0[p-1]<<8);
-						printk("PWMCNT : 0x%04x\n", FL_table0[p-1]);
+						if( gptHWCFG->m_val.bFrontLight == 3){  //TABLE0a
+							msp430_write (0xA5, 0x0100);	// Set Frequency 8M/400 (0x190) = 20K Hz
+							msp430_write (0xA4, 0x9000);
+							msp430_write (0xA7, FL_table0[p-1]&0xFF00);   // Set PWM duty
+							msp430_write (0xA6, FL_table0[p-1]<<8);
+							printk("PWMCNT : 0x%04x\n", FL_table0[p-1]);
+						}
+						else if( gptHWCFG->m_val.bFrontLight == 4){  //TABLE1
+							int freq = 8000000/FL_table1[p-1].freq;
+
+							gpio_direction_output (FL_R_EN, FL_table1[p-1].fl_r_en);				
+							if( freq != current_FL_freq){
+								printk ("Set front light Frequency : %d\n",FL_table1[p-1].freq);	
+								msp430_write (0xA5, freq&0xFF00);	// Set Frequency 8M/freq
+								msp430_write (0xA4, freq<<8);
+								current_FL_freq = freq;
+							}
+							msp430_write (0xA7, FL_table1[p-1].duty&0xFF00);	// Set PWM duty
+							msp430_write (0xA6, FL_table1[p-1].duty<<8);
+						}
+						else if( gptHWCFG->m_val.bFrontLight == 1 || gptHWCFG->m_val.bFrontLight == 2 ){  //TABLE0, TABLE0+
+							if (0 == last_FL_duty){
+								msp430_write (0xA5, 0x0100);	// Set Frequency 8M/400 (0x190) = 20K Hz
+								msp430_write (0xA4, 0x9000);
+							}
+							if(p<=50){
+								gpio_direction_output(FL_R_EN,0);
+								msp430_write (0xA7, FL_table0[2*(p-1)]&0xFF00);	// Set PWM duty
+								msp430_write (0xA6, FL_table0[2*(p-1)]<<8);
+								printk("PWMCNT : 0x%04x\n", FL_table0[2*(p-1)]);
+							}else{
+								gpio_direction_output(FL_R_EN,1);
+								msp430_write (0xA7, FL_table0[p-1]&0xFF00);	// Set PWM duty
+								msp430_write (0xA6, FL_table0[p-1]<<8);
+								printk("PWMCNT : 0x%04x\n", FL_table0[p-1]);
+							}
+						}
 					}else{
 						printk("Wrong number! level range from 0 to 100\n");
 					}
 					if (0 == last_FL_duty){
-						msp430_write (0xA1, 0xFF00);
+						msp430_write (0xA1, 0xFF00);	// Disable front light auto off timer
 						msp430_write (0xA2, 0xFF00);
-						msp430_write (0xA5, 0x0100);   
-						msp430_write (0xA4, 0x9000);
-						msp430_write (0xA3, 0x0100);
+
+						msp430_write (0xA3, 0x0100);	// enable front light pwm
 
 						msleep(100);
 						gpio_direction_output(FL_EN,0);
 					}
 				}
-				else {
-					printk ("turn off front light\n");
-					msp430_write (0xA3, 0);
-
-					gpio_direction_input(FL_EN);
-					gpio_direction_output(FL_R_EN,0);
+				else if(last_FL_duty != 0){
+					printk ("FL PWM off command\n");
+					msp430_write(0xA3, 0); 
+					schedule_delayed_work(&FL_off, 120);
 				}
 				last_FL_duty = p;
 			}
+
 			break;
 
 		case CM_FRONT_LIGHT_AVAILABLE:
@@ -1255,6 +1319,21 @@ static void LED(int on)
     	break;
     }
 }
+
+void FL_off_func(struct work_struct *work)
+{
+	printk("[%s-%d]FL PWR off\n",__FUNCTION__,__LINE__);
+	gpio_direction_input(FL_EN);
+	gpio_direction_output(FL_R_EN,0);
+}
+
+int FL_suspend(void){
+	if(delayed_work_pending(&FL_off)){
+		return -1;
+	}	
+	return 0;
+}
+
 
 static int sleep_thread(void)
 {
@@ -1805,14 +1884,17 @@ static int gpio_initials(void)
 	
 	
 	// FL_EN
-	if(0!=gptHWCFG->m_val.bFrontLight) {	
+	if( 0 != gptHWCFG->m_val.bFrontLight ){
 		mxc_iomux_v3_setup_pad(MX50_PAD_ECSPI1_MISO__GPIO_4_14);
 		gpio_request(FL_EN, "fl_en");
-		gpio_direction_input(FL_EN);
-		
+
 		mxc_iomux_v3_setup_pad(MX50_PAD_EPDC_VCOM1__GPIO_4_22);
 		gpio_request(FL_R_EN, "fl_r_en");
-		gpio_direction_output(FL_R_EN,0);
+		if( 0 == NTXHWCFG_TST_FLAG(gptHWCFG->m_val.bFrontLight_Flags,0)){
+			gpio_direction_input(FL_EN);
+			gpio_direction_output(FL_R_EN,0);
+		}
+		INIT_DELAYED_WORK(&FL_off, FL_off_func);
 	}
 	
 	// WIFI_3V3_ON 

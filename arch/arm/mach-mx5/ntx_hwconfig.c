@@ -85,15 +85,21 @@
 
 
 const char gszNtxHwCfgMagic[]="HW CONFIG ";// hw config tool magic .
-const char gszNtxHwCfgVersion[]="v1.3"; // hw config tool version .
+const char gszNtxHwCfgVersion[]="v1.6"; // hw config tool version .
 
 
 // field values table ...
-const char * gszPCBA[]={"E60800","E60810","E60820","E90800","E90810","E60830","E60850",
-"E50800","E50810","E60860","E60MT2","E60M10","E60610","E60M00","E60M30","E60620","E60630","E60640","E50600",
-"E60680","E60610C","E60610D","E606A0","E60670","E606B0","E50620","Q70Q00","E50610","E606C0","E606D0","E606E0"};
+const char * gszPCBA[]={ 
+	"E60800","E60810","E60820","E90800","E90810", //  0~4 
+	"E60830","E60850","E50800","E50810","E60860", //  5~9
+	"E60MT2","E60M10","E60610","E60M00","E60M30", // 10~14
+	"E60620","E60630","E60640","E50600","E60680", // 15~19
+	"E60610C","E60610D","E606A0","E60670","E606B0", // 20~24
+	"E50620","Q70Q00","E50610","E606C0","E606D0", // 25~29
+	"E606E0" ,	// 30~34
+};
 const char * gszKeyPadA[]={"MX357","MX357+Wheel","MX357+Joystick","MX35-5inch","1Key","E60M10",
-"E60M10+Touch","E60620","E60630","E60640","E606A0","FL_Key","NO_Key"};
+"E60M10+Touch","E60620","E60630","E60640","E606A0","FL_Key","NO_Key","FL+HOME"};
 /*
  *
  * 1Key : keypad layout only home key .
@@ -114,7 +120,7 @@ const char * gszDisplayPanelA[]={"6\" Left EPD","6\" Right EPD","9\" Right EPD",
 const char * gszRSensorA[]={"No","Rotary Encoder","G Sensor"};//
 const char * gszMicroPA[]={"MSP430"};//
 const char * gszCustomerA[]={"0","1","2","3","4","5","6","7","8",\
-	"9","10","11","12","13","14","15","16","17","18","19","20","21","22","23"};//
+	"9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25"};//
 const char * gszBatteryA[]={"1000mA","1500mA"};//
 const char * gszLedA[]={"TYPE1"};//
 const char * gszRamSizeA[]={"128MB","64MB","256MB","512MB","1GB","2GB","4GB"};// ram size 
@@ -159,10 +165,26 @@ const char * gszUIStyleA[]={"Ebrmain","Customer UI","Android"};// UI Style .
 const char * gszRAMTypeA[]={"MDDR","DDR2","K4X2G323PC","K4X2G323PD"};// Ram Type .
 const char * gszUIConfigA[]={"Normal","Normal2","AD"};// UI Config .
 const char * gszDisplayResolutionA[]={"800x600","1024x758","1024x768","1440x1080"};// Display resolution .
-const char * gszFrontLightA[]={"No","TABLE0"};// Front Light .
+const char * gszFrontLightA[]={"No","TABLE0","TABLE0+","TABLE0a"};// Front Light .
+ /*
+  * TABLE0 : FrontLight Table0, double table and seperated by HW gpio .
+  * TABLE0+ : FrontLight Table0, double table and seperated by HW gpio ,with shadow improvement .
+  * TABLE0a : FrontLight Table0, single table .
+  */
 const char * gszCPUFreqA[]={"NC","800M","1G","1.2G"};// CPU Freqency  .
 const char * gszHallSensorA[]={"No","TLE4913"};// Hall Sensor .
-
+const char * gszDisplayBusWidthA[]={"8Bits","16Bits","8Bits_mirror","16Bits_mirror"};// Display BUS width .
+const char * gszFrontLight_FlagsA[]={"BootON","TABLE1X"};//FrontLight Flags
+/*
+ * BootON : trun on the frontlight when booting .
+ * TABLE1X : ON=FrontLight table only single segment ; OFF=FrontLight table two segment seperated by gpio .
+ */ 
+const char * gszPCB_FlagsA[]={"NO_KeyMatrix","FPC_Touch","LOGO_LED"};//PCB Flags
+/*
+ * NO_KeyMatrix : ON=PCB has no key matrix design .
+ * FPC_Touch : ON=FPC touch design .
+ * LOGO_LED : ON=LOGO LED design .
+ */
 
 
 #define _TOTOAL_HWCONFIG_FIELDS 	(sizeof(gtHwConfigFields)/sizeof(gtHwConfigFields[0]))
@@ -232,7 +254,15 @@ static HwConfigField gtHwConfigFields[] = {
 		(char **)gszCPUFreqA,FIELD_TYPE_IDXSTR,FIELD_FLAGS_HW},
 	{"v1.3","HallSensor",sizeof(gszHallSensorA)/sizeof(gszHallSensorA[0]),
 		(char **)gszHallSensorA,FIELD_TYPE_IDXSTR,FIELD_FLAGS_HW},
+	{"v1.4","DisplayBusWidth",sizeof(gszDisplayBusWidthA)/sizeof(gszDisplayBusWidthA[0]),
+		(char **)gszDisplayBusWidthA,FIELD_TYPE_IDXSTR,FIELD_FLAGS_HW},
+	{"v1.5","FrontLight_Flags",sizeof(gszFrontLight_FlagsA)/sizeof(gszFrontLight_FlagsA[0]),
+		(char **)gszFrontLight_FlagsA,FIELD_TYPE_FLAGS,FIELD_FLAGS_HW},		
+	{"v1.6","PCB_Flags",sizeof(gszPCB_FlagsA)/sizeof(gszPCB_FlagsA[0]),
+		(char **)gszPCB_FlagsA,FIELD_TYPE_FLAGS,FIELD_FLAGS_HW},
 };
+
+
 
 static NTX_HWCONFIG _gtNtxHwCfg,*_gptNtxHwCfg=&_gtNtxHwCfg;
 
@@ -728,6 +758,113 @@ int NtxHwCfg_GetCfgFldVal(NTX_HWCONFIG *pHdr,int iFieldIdx)
 	return iRet;
 }
 
+int NtxHwCfg_GetCfgFldFlagVal(NTX_HWCONFIG *pHdr,int iFieldIdx,int iFlagsIdx)
+{
+	int iChk,iRet;
+	unsigned char bFldVal ;
+	
+	
+	
+	iChk = NtxHwCfg_GetCfgFldVal(pHdr,iFieldIdx);
+	if(iChk<0) {
+		return iChk;
+	}
+
+	if(FIELD_TYPE_FLAGS!=gtHwConfigFields[iFieldIdx].wFieldType) {
+		return HWCFG_RET_FIELDTYPEERROR;
+	}
+
+	if(iFlagsIdx<0) {
+		return HWCFG_RET_CFGVALFLAGIDXERROR;
+	}
+
+	if(iFlagsIdx>gtHwConfigFields[iFieldIdx].iFieldValueCnt) {
+		return HWCFG_RET_CFGVALFLAGIDXERROR;
+	}
+	
+	if(iFlagsIdx>7) {
+		return HWCFG_RET_CFGVALFLAGIDXERROR;
+	}
+
+	
+	bFldVal = (unsigned char) iChk;
+	if( bFldVal&(0x01<<iFlagsIdx) ) {
+		iRet = 1;
+	}
+	else {
+		iRet = 0;
+	}
+	
+	return iRet;
+}
+
+int NtxHwCfg_GetCfgFldFlagValByName(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFlagName)
+{
+	
+	int iRet;
+	int i,iTotalFlags;
+	
+	
+	iTotalFlags = gtHwConfigFields[iFieldIdx].iFieldValueCnt;
+	ASSERT(iTotalFlags<255);
+	iRet = HWCFG_RET_CFGVALFLAGNAMEERROR;
+	for(i=0;i<iTotalFlags;i++) 
+	{
+		if(0==strcmp(gtHwConfigFields[iFieldIdx].szFieldValueA[i],pszFlagName)) {
+			iRet = NtxHwCfg_GetCfgFldFlagVal(pHdr,iFieldIdx,i);
+			break;
+		}
+	}
+	
+	return iRet;
+}
+
+int NtxHwCfg_SetCfgFldFlagValByName(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFlagName,int iIsTurnON,int iHW_WR_Protect)
+{
+	int iChk,iRet=HWCFG_RET_SUCCESS;
+	int i,iTotalVals;
+	unsigned char bFldVal,*pbVal ;
+	
+	
+	iChk = NtxHwCfg_GetCfgFldVal(pHdr,iFieldIdx);
+	if(iChk<0) {
+		return iChk;
+	}
+	#ifndef _X86_//[
+	else if(iHW_WR_Protect) {
+		if( !(gtHwConfigFields[iFieldIdx].wFieldFlags & FIELD_FLAGS_SW) ) {
+			iRet = HWCFG_RET_FIELDTRDONLY;
+			WARNING_MSG("%s:[WARNING] field \"%s\" is read only !! \n",
+				__FUNCTION__,gtHwConfigFields[iFieldIdx].szFieldName);
+		}
+		return iRet;
+	}
+	#endif //] !_X86_
+	
+	
+	bFldVal = (unsigned char) iChk;
+	pbVal = (unsigned char *)&pHdr->m_val;
+	
+	iTotalVals = gtHwConfigFields[iFieldIdx].iFieldValueCnt;
+	ASSERT(iTotalVals<255);
+	iRet = HWCFG_RET_CFGVALFLAGNAMEERROR;
+	for(i=0;i<iTotalVals;i++) 
+	{
+		if(0==strcmp(gtHwConfigFields[iFieldIdx].szFieldValueA[i],pszFlagName)) {
+			if(iIsTurnON) {
+				bFldVal |= (unsigned char)(0x01<<i);
+			}
+			else {
+				bFldVal &= ~((unsigned char)(0x01<<i));
+			}
+			pbVal[iFieldIdx]=bFldVal;
+			iRet = HWCFG_RET_SUCCESS;
+			break;
+		}
+	}
+	return iRet;
+}
+
 const char *NtxHwCfg_GetCfgFldStrVal(NTX_HWCONFIG *pHdr,int iFieldIdx)
 {
 	int iRet;
@@ -807,7 +944,7 @@ int NtxHwCfg_SetCfgFldVal(NTX_HWCONFIG *pHdr,int iFieldIdx,int iFieldVal)
 	return iRet;
 }
 
-int NtxHwCfg_SetCfgFldStrVal(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFieldStrVal)
+int NtxHwCfg_SetCfgFldStrValEx(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFieldStrVal,int iHW_WR_Protect)
 {
 	int iRet ;
 	
@@ -830,13 +967,15 @@ int NtxHwCfg_SetCfgFldStrVal(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFie
 			iRet = HWCFG_RET_FIELDTYPEERROR;
 		}
 		#ifndef _X86_//[
-		if( !(gtHwConfigFields[iFieldIdx].wFieldFlags & FIELD_FLAGS_SW) ) {
-			iRet = HWCFG_RET_FIELDTRDONLY;
-			WARNING_MSG("%s:[WARNING] field \"%s\" is read only !! \n",
-				__FUNCTION__,gtHwConfigFields[iFieldIdx].szFieldName);
+		else if(iHW_WR_Protect) {
+			if( !(gtHwConfigFields[iFieldIdx].wFieldFlags & FIELD_FLAGS_SW) ) {
+				iRet = HWCFG_RET_FIELDTRDONLY;
+				WARNING_MSG("%s:[WARNING] field \"%s\" is read only !! \n",
+					__FUNCTION__,gtHwConfigFields[iFieldIdx].szFieldName);
+			}
 		}
 		#endif //] !_X86_
-		if(iFieldIdx<_TOTOAL_HWCONFIG_FIELDS) {
+		else if(iFieldIdx<_TOTOAL_HWCONFIG_FIELDS) {
 			unsigned char bFldVal;
 			
 			bFldVal = NtxHwCfg_FldStrVal2Val( iFieldIdx, (char *)pszFieldStrVal);
@@ -853,6 +992,11 @@ int NtxHwCfg_SetCfgFldStrVal(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFie
 	} 
 	
 	return iRet;
+}
+
+int NtxHwCfg_SetCfgFldStrVal(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFieldStrVal)
+{
+	return NtxHwCfg_SetCfgFldStrValEx(pHdr,iFieldIdx,pszFieldStrVal,1);
 }
 
 int NtxHwCfg_CompareHdrFldVersion(NTX_HWCONFIG *pHdr,int iFieldIdx)

@@ -372,6 +372,17 @@ extern int gSleep_Mode_Suspend;
 static int zForce_ir_touch_suspend(struct platform_device *pdev, pm_message_t state)
 {
 //	printk ("[%s-%d] %s() %d\n",__FILE__,__LINE__,__func__,gSleep_Mode_Suspend);
+	if (gSleep_Mode_Suspend) {
+		if(8==gptHWCFG->m_val.bTouchCtrl) {
+			i2c_master_send(zForce_ir_touch_data.client, cmd_Deactive_v2, sizeof(cmd_Deactive_v2));
+		}else{
+			i2c_master_send(zForce_ir_touch_data.client, cmd_Deactive, sizeof(cmd_Deactive));
+		}	
+		msleep(200);
+		disable_irq_wake(zForce_ir_touch_data.client->irq);
+		return 0;
+	}
+
 
 	/* return immediatly if the driver is still handling touch data */
 	if (g_touch_pressed || g_touch_triggered) {
@@ -385,15 +396,6 @@ static int zForce_ir_touch_suspend(struct platform_device *pdev, pm_message_t st
 		zForce_ir_touch_ts_triggered ();
 		printk ("[%s-%d] zForce touch event not processed.\n",__func__,__LINE__);
 		return -1;
-	}
-	if (gSleep_Mode_Suspend) {
-		if(8==gptHWCFG->m_val.bTouchCtrl) {
-			i2c_master_send(zForce_ir_touch_data.client, cmd_Deactive_v2, sizeof(cmd_Deactive_v2));
-		}else{
-			i2c_master_send(zForce_ir_touch_data.client, cmd_Deactive, sizeof(cmd_Deactive));
-		}	
-		msleep(200);
-		disable_irq_wake(zForce_ir_touch_data.client->irq);
 	}
 	return 0;
 }

@@ -40,9 +40,9 @@ typedef struct tagNTXHWCFG_VAL {
 	unsigned char bSysPartType;// system partition type .
 	unsigned char bProgressXHiByte; // Progress bar position while boot ,X
 	unsigned char bProgressXLoByte; //                                  ,X
-	unsigned char bProgressYHiByte; // 																	,Y
-	unsigned char bProgressYLoByte; // 																	,Y
-	unsigned char bProgressCnts;		//                                  ,Cnt .
+	unsigned char bProgressYHiByte; // 							,Y
+	unsigned char bProgressYLoByte; // 							,Y
+	unsigned char bProgressCnts;		// 							Cnt .
 	unsigned char bContentType; // Book content type .
 	unsigned char bCPU; //main cpu type .
 	unsigned char bUIStyle; // UI style .
@@ -52,16 +52,21 @@ typedef struct tagNTXHWCFG_VAL {
 	unsigned char bFrontLight;// Front Light .
 	unsigned char bCPUFreq;// CPU frequency  .
 	unsigned char bHallSensor;// Hall Sensor Controller  .
+	unsigned char bDisplayBusWidth;// Display BUS width/bits .
+	unsigned char bFrontLight_Flags;// Front Light Flags .
+	unsigned char bPCB_Flags;// PCB Flags .
 } NTXHWCFG_VAL ;
 
 typedef struct tagNTX_HWCONFG{
 	NTXHWCFG_HDR m_hdr;
 	NTXHWCFG_VAL m_val;
+	unsigned char m_bReserveA[110-sizeof(NTXHWCFG_HDR)-sizeof(NTXHWCFG_VAL)];
 } NTX_HWCONFIG;
 
 // Filed types ...
 #define FIELD_TYPE_IDXSTR	0
 #define FIELD_TYPE_BYTE		1
+#define FIELD_TYPE_FLAGS		2
 
 // Filed Flags ...
 #define FIELD_FLAGS_HW		0x0000
@@ -107,6 +112,7 @@ extern const char * gszDisplayResolutionA[];// Display Resolution .
 extern const char * gszFrontLightA[];// Front Light .
 extern const char * gszCPUFreqA[];// CPU frequency .
 extern const char * gszHallSensorA[];// Hall Sensor .
+extern const char * gszDisplayBusWidthA[];// Display BUS width .
 
 
 // the return value of hw config apis . >=0 is success ,others is fail .
@@ -123,6 +129,8 @@ extern const char * gszHallSensorA[];// Hall Sensor .
 #define HWCFG_RET_FILEWRITEFAIL (-10) // file open fail .
 #define HWCFG_RET_FIELDTYPEERROR (-11) // field type error .
 #define HWCFG_RET_FIELDTRDONLY (-12) // field read only .
+#define HWCFG_RET_CFGVALFLAGIDXERROR (-13) // index of config's flags not avalible  .
+#define HWCFG_RET_CFGVALFLAGNAMEERROR (-14) // flag name of config not avalible  .
 
 
 // ntx hardward config field index list ...
@@ -164,7 +172,9 @@ extern const char * gszHallSensorA[];// Hall Sensor .
 #define HWCFG_FLDIDX_FRONTLIGHT			32 // v1.1
 #define HWCFG_FLDIDX_CPUFREQ			33 // v1.2
 #define HWCFG_FLDIDX_HALLSENSOR			34 // v1.3
-
+#define HWCFG_FLDIDX_DisplayBusWidth			35 // v1.4
+#define HWCFG_FLDIDX_FrontLight_Flags			36 // v1.5
+#define HWCFG_FLDIDX_PCB_Flags			37 // v1.6
 
 
 
@@ -190,9 +200,13 @@ int NtxHwCfg_GetCfgTotalFlds(NTX_HWCONFIG *pHdr);//取得組態總共有幾個欄位.
 
 int NtxHwCfg_GetCfgFldVal(NTX_HWCONFIG *pHdr,int iFieldIdx);
 const char *NtxHwCfg_GetCfgFldStrVal(NTX_HWCONFIG *pHdr,int iFieldIdx);
+int NtxHwCfg_GetCfgFldFlagVal(NTX_HWCONFIG *pHdr,int iFieldIdx,int iFlagsIdx);
+int NtxHwCfg_GetCfgFldFlagValByName(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFlagName);
 
 int NtxHwCfg_SetCfgFldVal(NTX_HWCONFIG *pHdr,int iFieldIdx,int iFieldVal);
 int NtxHwCfg_SetCfgFldStrVal(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFieldStrVal);
+int NtxHwCfg_SetCfgFldStrValEx(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFieldStrVal,int iHW_WR_Protect);
+int NtxHwCfg_SetCfgFldFlagValByName(NTX_HWCONFIG *pHdr,int iFieldIdx,const char *pszFlagName,int iIsTurnON,int iHW_WR_Protect);
 
 int NtxHwCfg_SetCfgFldValDefs(NTX_HWCONFIG *I_pHdr,int I_iFieldIdx,
 		const char **I_pszFieldValDefs,int I_iTotalVals);
@@ -204,6 +218,7 @@ int NtxHwCfg_CompareHdrFldVersion(NTX_HWCONFIG *pHdr,int iFieldIdx);
 // get print format by field in hardware config struct ...
 #define NTXHWCFG_GET_FLDCFGPRTFMT(pHdr,_fld)	"%s : %s",#_fld,NTXHWCFG_GET_FLDCFGNAME(pHdr,_fld)
 
+#define NTXHWCFG_TST_FLAG(_flags,_bit_n)	((_flags)&(0x01<<(_bit_n)))?1:0
 
 #ifdef __cplusplus //[
 }
