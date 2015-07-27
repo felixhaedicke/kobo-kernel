@@ -21,6 +21,7 @@
 /* #define VERBOSE_DEBUG */
 
 #include <linux/kallsyms.h>
+#include <linux/kdev_t.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/device.h>
@@ -70,6 +71,271 @@ module_param(iSerialNumber, charp, 0);
 MODULE_PARM_DESC(iSerialNumber, "SerialNumber string");
 
 /*-------------------------------------------------------------------------*/
+
+
+/*
+ * HACK: Support for receiving Android Open Accessory configuration messages.
+ * The Accessory configuration is accessible via SysFS:
+ * /sys/class/usb_composite/accessory
+ * This code is injected here, because we require access to all configuration
+ * transfers, even before composite functions are bound.
+ */
+
+
+#define ACCESSORY_PROTOCOL_VERSION 2
+
+#define ACCESSORY_STRING_MANUFACTURER 0
+#define ACCESSORY_STRING_MODEL 1
+#define ACCESSORY_STRING_DESCRIPTION 2
+#define ACCESSORY_STRING_VERSION 3
+#define ACCESSORY_STRING_URI 4
+#define ACCESSORY_STRING_SERIAL 5
+#define ACCESSORY_GET_PROTOCOL 51
+#define ACCESSORY_SEND_STRING 52
+#define ACCESSORY_START 53
+
+spinlock_t accessory_lock;
+
+static int accessory_string_index;
+
+static char accessory_manufacturer[256];
+static char accessory_model[256];
+static char accessory_description[256];
+static char accessory_version[256];
+static char accessory_uri[256];
+static char accessory_serial[256];
+
+static bool accessory_start_requested;
+
+static void accessory_clear_info(void)
+{
+	spin_lock(&accessory_lock);
+	accessory_manufacturer[0] = 0;
+	accessory_model[0] = 0;
+	accessory_description[0] = 0;
+	accessory_version[0] = 0;
+	accessory_uri[0] = 0;
+	accessory_serial[0] = 0;
+	accessory_start_requested = false;
+	spin_unlock(&accessory_lock);
+}
+
+static ssize_t accessory_manufacturer_show(struct device *dev, struct
+		device_attribute *attr, char *buf)
+{
+	ssize_t ret;
+	spin_lock(&accessory_lock);
+	ret = sprintf(buf, "%s\n", accessory_manufacturer);
+	spin_unlock(&accessory_lock);
+	return ret;
+}
+
+static ssize_t accessory_model_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret;
+	spin_lock(&accessory_lock);
+	ret = sprintf(buf, "%s\n", accessory_model);
+	spin_unlock(&accessory_lock);
+	return ret;
+}
+
+static ssize_t accessory_description_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret;
+	spin_lock(&accessory_lock);
+	ret = sprintf(buf, "%s\n", accessory_description);
+	spin_unlock(&accessory_lock);
+	return ret;
+}
+
+static ssize_t accessory_version_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret;
+	spin_lock(&accessory_lock);
+	ret = sprintf(buf, "%s\n", accessory_version);
+	spin_unlock(&accessory_lock);
+	return ret;
+}
+
+static ssize_t accessory_uri_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret;
+	spin_lock(&accessory_lock);
+	ret = sprintf(buf, "%s\n", accessory_uri);
+	spin_unlock(&accessory_lock);
+	return ret;
+}
+
+static ssize_t accessory_serial_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret;
+	spin_lock(&accessory_lock);
+	ret = sprintf(buf, "%s\n", accessory_serial);
+	spin_unlock(&accessory_lock);
+	return ret;
+}
+
+static ssize_t accessory_start_requested_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret;
+	spin_lock(&accessory_lock);
+	ret = sprintf(buf, "%d\n", accessory_start_requested);
+	spin_unlock(&accessory_lock);
+	return ret;
+}
+
+static DEVICE_ATTR(manufacturer, S_IRUGO, accessory_manufacturer_show, NULL);
+static DEVICE_ATTR(model, S_IRUGO, accessory_model_show, NULL);
+static DEVICE_ATTR(description, S_IRUGO, accessory_description_show, NULL);
+static DEVICE_ATTR(version, S_IRUGO, accessory_version_show, NULL);
+static DEVICE_ATTR(uri, S_IRUGO, accessory_uri_show, NULL);
+static DEVICE_ATTR(serial, S_IRUGO, accessory_serial_show, NULL);
+static DEVICE_ATTR(start_requested, S_IRUGO,
+		accessory_start_requested_show, NULL);
+
+static struct device_attribute *accessory_attributes[] = {
+	&dev_attr_manufacturer,
+	&dev_attr_model,
+	&dev_attr_description,
+	&dev_attr_version,
+	&dev_attr_uri,
+	&dev_attr_serial,
+	&dev_attr_start_requested,
+	NULL
+};
+
+static struct class *usb_composite_class = NULL;
+static struct device *accessory_device = NULL;
+
+static int accessory_init(void)
+{
+	int status;
+	struct device_attribute **attrs = accessory_attributes;
+	struct device_attribute *attr;
+
+	spin_lock_init(&accessory_lock);
+
+	usb_composite_class = class_create(THIS_MODULE, "usb_composite");
+	if (IS_ERR(usb_composite_class)) {
+		return PTR_ERR(usb_composite_class);
+	}
+
+	accessory_device = device_create(usb_composite_class, NULL,
+					 MKDEV(0, 0), NULL, "accessory");
+	if (IS_ERR(accessory_device)) {
+		status = PTR_ERR(accessory_device);
+		goto fail_device_create;
+	}
+
+	while ((attr = *attrs++)) {
+		status = device_create_file(accessory_device, attr);
+		if (status)
+			goto fail_device_create_file;
+	}
+
+	accessory_clear_info();
+
+	return 0;
+
+fail_device_create_file:
+	device_destroy(usb_composite_class, accessory_device->devt);
+	accessory_device = NULL;
+fail_device_create:
+	class_destroy(usb_composite_class);
+	usb_composite_class = NULL;
+	return status;
+}
+
+static void accessory_deinit(void)
+{
+	if (usb_composite_class && accessory_device) {
+		device_destroy(usb_composite_class, accessory_device->devt);
+		class_destroy(usb_composite_class);
+	}
+}
+
+
+/*-------------------------------------------------------------------------*/
+
+
+static void
+composite_accessory_set_string(struct usb_ep *ep, struct usb_request *req)
+{
+	char *string_dest = NULL;
+	int length = req->actual;
+	switch (accessory_string_index) {
+	case ACCESSORY_STRING_MANUFACTURER:
+		string_dest = accessory_manufacturer;
+		break;
+	case ACCESSORY_STRING_MODEL:
+		string_dest = accessory_model;
+		break;
+	case ACCESSORY_STRING_DESCRIPTION:
+		string_dest = accessory_description;
+		break;
+	case ACCESSORY_STRING_VERSION:
+		string_dest = accessory_version;
+		break;
+	case ACCESSORY_STRING_URI:
+		string_dest = accessory_uri;
+		break;
+	case ACCESSORY_STRING_SERIAL:
+		string_dest = accessory_serial;
+		break;
+	}
+	if (string_dest) {
+		if (length >= 256)
+			length = 255;
+
+		spin_lock(&accessory_lock);
+		memcpy(string_dest, req->buf, length);
+		string_dest[length] = 0;
+		spin_unlock(&accessory_lock);
+	}
+	else
+	{
+		pr_err("unknown accessory string index %d\n",
+			accessory_string_index);
+	}
+}
+
+static int composite_accessory_setup(struct usb_gadget *gadget,
+		const struct usb_ctrlrequest *ctrl,
+		struct usb_composite_dev *cdev)
+{
+	int req_length = -1;
+
+	if (ctrl->bRequestType == (USB_DIR_OUT | USB_TYPE_VENDOR)) {
+		if (ctrl->bRequest == ACCESSORY_START) {
+			accessory_start_requested = true;
+			req_length = 0;
+		} else if (ctrl->bRequest == ACCESSORY_SEND_STRING) {
+			accessory_string_index = le16_to_cpu(ctrl->wIndex);
+			cdev->req->complete = composite_accessory_set_string;
+			req_length = le16_to_cpu(ctrl->wLength);
+		}
+	} else if (ctrl->bRequestType == (USB_DIR_IN | USB_TYPE_VENDOR)) {
+		if (ctrl->bRequest == ACCESSORY_GET_PROTOCOL) {
+			*((u16 *)cdev->req->buf) = ACCESSORY_PROTOCOL_VERSION;
+			req_length = sizeof(u16);
+			accessory_clear_info();
+		}
+	}
+
+	if (req_length >= 0) {
+		cdev->req->length = req_length;
+		return usb_ep_queue(cdev->gadget->ep0, cdev->req, GFP_ATOMIC);
+	}
+
+	return -EOPNOTSUPP;
+}
+
 
 /**
  * usb_add_function() - add a function to a configuration
@@ -377,6 +643,8 @@ static void reset_config(struct usb_composite_dev *cdev)
 		bitmap_zero(f->endpoints, 32);
 	}
 	cdev->config = NULL;
+
+	accessory_clear_info();
 }
 
 static int set_config(struct usb_composite_dev *cdev,
@@ -716,6 +984,7 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 	u16				w_length = le16_to_cpu(ctrl->wLength);
 	struct usb_function		*f = NULL;
 	u8				endp;
+	int				accessory_setup_ret;
 
 	/* partial re-init of the response message; the function or the
 	 * gadget might need to intercept e.g. a control-OUT completion
@@ -725,6 +994,10 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 	req->complete = composite_setup_complete;
 	req->length = USB_BUFSIZ;
 	gadget->ep0->driver_data = cdev;
+
+	accessory_setup_ret = composite_accessory_setup(gadget, ctrl, cdev);
+	if (-EOPNOTSUPP != accessory_setup_ret)
+		return accessory_setup_ret;
 
 	switch (ctrl->bRequest) {
 
@@ -894,6 +1167,8 @@ static void composite_disconnect(struct usb_gadget *gadget)
 	if (cdev->config)
 		reset_config(cdev);
 	spin_unlock_irqrestore(&cdev->lock, flags);
+
+	accessory_clear_info();
 }
 
 /*-------------------------------------------------------------------------*/
@@ -958,6 +1233,7 @@ composite_unbind(struct usb_gadget *gadget)
 	set_gadget_data(gadget, NULL);
 	device_remove_file(&gadget->dev, &dev_attr_suspended);
 	composite = NULL;
+	accessory_deinit();
 }
 
 static void
@@ -1051,6 +1327,10 @@ static int composite_bind(struct usb_gadget *gadget)
 
 	status = device_create_file(&gadget->dev, &dev_attr_suspended);
 	if (status)
+		goto fail;
+
+	status = accessory_init();
+	if (status != 0)
 		goto fail;
 
 	INFO(cdev, "%s ready\n", composite->name);
