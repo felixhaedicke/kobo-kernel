@@ -847,6 +847,16 @@ config USB_G_SERIAL
 	  which includes instructions and a "driver info file" needed to
 	  make MS-Windows work with CDC ACM.
 
+config USB_G_ACCESSORY_SERIAL
+	tristate "Serial / Open Accessory Gadget"
+	help
+	  Fork of the "g_serial" driver. It offers two modes:
+	  * CDC/ACM (first TTY port, usually ttyGS0)
+	  * Non-ACM mode of (function "gser") for Android Open Accessory
+	    compatibility (first TTY port, usually ttyGS1)
+	  Modes can be switched via SysFS:
+	  /sys/class/usb_composite_device/accessory_multi/mode
+
 config USB_MIDI_GADGET
 	tristate "MIDI Gadget (EXPERIMENTAL)"
 	depends on SND && EXPERIMENTAL
