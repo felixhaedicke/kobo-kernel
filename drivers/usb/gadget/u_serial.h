@@ -53,6 +53,8 @@ void gs_free_req(struct usb_ep *, struct usb_request *req);
 
 /* port setup/teardown is handled by gadget driver */
 int gserial_setup(struct usb_gadget *g, unsigned n_ports);
+int gserial_setup_ex(struct usb_gadget *g, unsigned n_ports,
+		     const char *name, int major);
 void gserial_cleanup(void);
 
 /* connect/disconnect is handled by individual functions */
