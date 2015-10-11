@@ -56,6 +56,8 @@
 */
 #define GS_VENDOR_ID			0x0525	/* NetChip */
 #define GS_PRODUCT_ID			0xa4a6	/* Linux-USB Serial Gadget */
+#define GS_ACCESSORY_VENDOR_ID		0x18d1	/* Google */
+#define GS_ACCESSORY_PRODUCT_ID		0x2d00	/* Android Open Accessory */
 #define GS_CDC_PRODUCT_ID		0xa4a7	/* ... as CDC-ACM */
 #define GS_CDC_OBEX_PRODUCT_ID		0xa4a9	/* ... as CDC-OBEX */
 
@@ -64,6 +66,9 @@
 #define STRING_MANUFACTURER_IDX		0
 #define STRING_PRODUCT_IDX		1
 #define STRING_DESCRIPTION_IDX		2
+
+#define GS_TTY_NAME_ACCESSORY	"ttyOA"
+#define GS_TTY_MAJOR_ACCESSORY	251
 
 static char manufacturer[50];
 
@@ -131,6 +136,11 @@ static int use_obex = false;
 module_param(use_obex, bool, 0);
 MODULE_PARM_DESC(use_obex, "Use CDC OBEX, default=no");
 
+static int open_accessory_mode = false;
+module_param(open_accessory_mode, bool, 0);
+MODULE_PARM_DESC(open_accessory_mode,
+		 "Use Android Open Accessory compatibility mode, default=no");
+
 static unsigned n_ports = 1;
 module_param(n_ports, uint, 0);
 MODULE_PARM_DESC(n_ports, "number of ports to create, default=1");
@@ -143,7 +153,9 @@ static int __init serial_bind_config(struct usb_configuration *c)
 	int status = 0;
 
 	for (i = 0; i < n_ports && status == 0; i++) {
-		if (use_acm)
+		if (open_accessory_mode)
+			status = gser_bind_config(c, i);
+		else if (use_acm)
 			status = acm_bind_config(c, i);
 		else if (use_obex)
 			status = obex_bind_config(c, i);
@@ -167,7 +179,12 @@ static int __init gs_bind(struct usb_composite_dev *cdev)
 	struct usb_gadget	*gadget = cdev->gadget;
 	int			status;
 
-	status = gserial_setup(cdev->gadget, n_ports);
+	if (open_accessory_mode)
+		status = gserial_setup_ex(cdev->gadget, n_ports,
+					  GS_TTY_NAME_ACCESSORY,
+					  GS_TTY_MAJOR_ACCESSORY);
+	else
+		status = gserial_setup(cdev->gadget, n_ports);
 	if (status < 0)
 		return status;
 
@@ -250,7 +267,15 @@ static int __init init(void)
 	/* We *could* export two configs; that'd be much cleaner...
 	 * but neither of these product IDs was defined that way.
 	 */
-	if (use_acm) {
+	if (open_accessory_mode) {
+		serial_config_driver.label = "Open Accessory config";
+		serial_config_driver.bConfigurationValue = 1;
+		device_desc.bDeviceClass = USB_CLASS_VENDOR_SPEC;
+		device_desc.idVendor =
+				cpu_to_le16(GS_ACCESSORY_VENDOR_ID);
+		device_desc.idProduct =
+				cpu_to_le16(GS_ACCESSORY_PRODUCT_ID);
+	} else if (use_acm) {
 		serial_config_driver.label = "CDC ACM config";
 		serial_config_driver.bConfigurationValue = 2;
 		device_desc.bDeviceClass = USB_CLASS_COMM;
