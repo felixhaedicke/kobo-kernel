@@ -55,6 +55,8 @@
 
 #define PREFIX	"ttyGS"
 
+#define GS_TTY_MAJOR 250
+
 /*
  * gserial is the lifecycle interface, used by USB functions
  * gs_port is the I/O nexus, used by the tty driver
@@ -1067,6 +1069,7 @@ int __init gserial_setup(struct usb_gadget *g, unsigned count)
 	gs_tty_driver->owner = THIS_MODULE;
 	gs_tty_driver->driver_name = "g_serial";
 	gs_tty_driver->name = PREFIX;
+	gs_tty_driver->major = major;
 	/* uses dynamically assigned dev_t values */
 
 	gs_tty_driver->type = TTY_DRIVER_TYPE_SERIAL;
