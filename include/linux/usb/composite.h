@@ -135,6 +135,7 @@ struct usb_function {
 					bool config0);
 	void			(*suspend)(struct usb_function *);
 	void			(*resume)(struct usb_function *);
+	void			(*disconnected)(struct usb_function *);
 
 	/* private: */
 	/* internals */

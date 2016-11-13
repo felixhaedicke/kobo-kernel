@@ -1052,6 +1052,13 @@ static void composite_disconnect(struct usb_gadget *gadget)
 {
 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
 	unsigned long			flags;
+	struct usb_configuration *c;
+	struct usb_function *f;
+
+	list_for_each_entry(c, &cdev->configs, list)
+		list_for_each_entry(f, &c->functions, list)
+			if (f->disconnected)
+			    f->disconnected(f);
 
 	/* REVISIT:  should we have config and device level
 	 * disconnect callbacks?
