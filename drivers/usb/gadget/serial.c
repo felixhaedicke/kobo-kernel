@@ -10,11 +10,19 @@
  * either version 2 of that License or (at your option) any later version.
  */
 
+#include <linux/atomic.h>
 #include <linux/kernel.h>
 #include <linux/utsname.h>
 #include <linux/device.h>
+#include <linux/ioctl.h>
+#include <linux/miscdevice.h>
+#include <linux/mutex.h>
+#include <linux/poll.h>
+#include <linux/spinlock.h>
+#include <linux/string.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
+#include <linux/wait.h>
 
 #include "u_serial.h"
 #include "gadget_chips.h"
@@ -27,6 +35,75 @@
 
 #define GS_LONG_NAME			"Gadget Serial"
 #define GS_VERSION_NAME			GS_LONG_NAME " " GS_VERSION_STR
+
+
+#define AOA_IOCTL_SWITCH_TO_AOA _IO('g', 1)
+#define AOA_IOCTL_SWITCH_TO_ACM _IO('g', 2)
+#define AOA_IOCTL_RESET _IO('g', 3)
+
+#define AOA_MAX_STR_SIZE 256
+
+#define AOA_PROTOCOL_VERSION 2
+
+#define AOA_REQ_GET_PROTOCOL 51
+#define AOA_REQ_SEND_STRING 52
+#define AOA_REQ_START 53
+
+enum aoa_string_type {
+	AOA_STRING_MANUFACTURER = 0,
+	AOA_STRING_MODEL = 1,
+	AOA_STRING_DESCRIPTION = 2,
+	AOA_STRING_VERSION = 3,
+	AOA_STRING_URI = 4,
+	AOA_STRING_SERIAL = 5
+};
+
+enum aoa_event_type {
+	AOA_EVENT_CONNECTED_ACM = 0,
+	AOA_EVENT_DISCONNECTED_ACM = 1,
+	AOA_EVENT_STRING_RECEIVED = 2,
+	AOA_EVENT_START_REQUESTED = 3
+};
+
+struct aoa_string {
+	enum aoa_string_type type;
+	char str[AOA_MAX_STR_SIZE];
+};
+
+struct aoa_event {
+	enum aoa_event_type type;
+	struct aoa_string string;
+};
+
+static void aoa_event_add(enum aoa_event_type type);
+static void aoa_str_received_event_add(enum aoa_string_type type, void *strbuf,
+				       size_t len);
+
+static atomic_t aoa_connected_acm = ATOMIC_INIT(false);
+
+static void aoa_set_connected_acm(bool new_connected_acm)
+{
+	if (atomic_xchg(&aoa_connected_acm, new_connected_acm) !=
+			new_connected_acm) {
+		if (new_connected_acm)
+			aoa_event_add(AOA_EVENT_CONNECTED_ACM);
+		else
+			aoa_event_add(AOA_EVENT_DISCONNECTED_ACM);
+	}
+}
+
+enum gadget_mode {
+	MODE_NONE,
+	MODE_ACM,
+	MODE_AOA
+};
+
+static DEFINE_MUTEX(mode_switch_mutex);
+static enum gadget_mode current_mode = MODE_NONE;
+static int switch_mode(enum gadget_mode new_mode);
+static int reset_mode(void);
+
+static atomic_t aoa_ctrl_open = ATOMIC_INIT(false);
 
 /*-------------------------------------------------------------------------*/
 
@@ -54,10 +131,11 @@
 * DO NOT REUSE THESE IDs with a protocol-incompatible driver!!  Ever!!
 * Instead:  allocate your own, using normal USB-IF procedures.
 */
-#define GS_VENDOR_ID			0x0525	/* NetChip */
-#define GS_PRODUCT_ID			0xa4a6	/* Linux-USB Serial Gadget */
-#define GS_CDC_PRODUCT_ID		0xa4a7	/* ... as CDC-ACM */
-#define GS_CDC_OBEX_PRODUCT_ID		0xa4a9	/* ... as CDC-OBEX */
+#define GS_ACM_VENDOR_ID	0x0525	/* NetChip */
+#define GS_ACM_PRODUCT_ID	0xa4a7	/* ... as CDC-ACM */
+
+#define GS_AOA_VENDOR_ID	0x18d1	/* Google */
+#define GS_AOA_PRODUCT_ID	0x2d00 /* Accessory mode */
 
 /* string IDs are assigned dynamically */
 
@@ -92,7 +170,7 @@ static struct usb_device_descriptor device_desc = {
 	.bDeviceSubClass =	0,
 	.bDeviceProtocol =	0,
 	/* .bMaxPacketSize0 = f(hardware) */
-	.idVendor =		cpu_to_le16(GS_VENDOR_ID),
+	/* .idVendor = DYNAMIC */
 	/* .idProduct =	f(use_acm) */
 	/* .bcdDevice = f(hardware) */
 	/* .iManufacturer = DYNAMIC */
@@ -123,35 +201,7 @@ MODULE_AUTHOR("Al Borchers");
 MODULE_AUTHOR("David Brownell");
 MODULE_LICENSE("GPL");
 
-static int use_acm = true;
-module_param(use_acm, bool, 0);
-MODULE_PARM_DESC(use_acm, "Use CDC ACM, default=yes");
-
-static int use_obex = false;
-module_param(use_obex, bool, 0);
-MODULE_PARM_DESC(use_obex, "Use CDC OBEX, default=no");
-
-static unsigned n_ports = 1;
-module_param(n_ports, uint, 0);
-MODULE_PARM_DESC(n_ports, "number of ports to create, default=1");
-
 /*-------------------------------------------------------------------------*/
-
-static int __ref serial_bind_config(struct usb_configuration *c)
-{
-	unsigned i;
-	int status = 0;
-
-	for (i = 0; i < n_ports && status == 0; i++) {
-		if (use_acm)
-			status = acm_bind_config(c, i);
-		else if (use_obex)
-			status = obex_bind_config(c, i);
-		else
-			status = gser_bind_config(c, i);
-	}
-	return status;
-}
 
 static struct usb_configuration serial_config_driver = {
 	/* .label = f(use_acm) */
@@ -160,13 +210,17 @@ static struct usb_configuration serial_config_driver = {
 	.bmAttributes	= USB_CONFIG_ATT_SELFPOWER,
 };
 
-static int __ref gs_bind(struct usb_composite_dev *cdev)
+static int gs_bind(struct usb_composite_dev *cdev, bool in_aoa_mode)
 {
 	int			gcnum;
 	struct usb_gadget	*gadget = cdev->gadget;
 	int			status;
 
-	status = gserial_setup(cdev->gadget, n_ports);
+	if (in_aoa_mode) {
+		status = gserial_setup_ex(cdev->gadget, 1, "ttyAOA");
+	} else {
+		status = gserial_setup(cdev->gadget, 1);
+	}
 	if (status < 0)
 		return status;
 
@@ -225,7 +279,7 @@ static int __ref gs_bind(struct usb_composite_dev *cdev)
 
 	/* register our configuration */
 	status = usb_add_config(cdev, &serial_config_driver,
-			serial_bind_config);
+				in_aoa_mode ? gser_bind_config : acm_bind_config);
 	if (status < 0)
 		goto fail;
 
@@ -234,8 +288,19 @@ static int __ref gs_bind(struct usb_composite_dev *cdev)
 	return 0;
 
 fail:
+
 	gserial_cleanup();
 	return status;
+}
+
+static int gs_bind_acm(struct usb_composite_dev *cdev)
+{
+	return gs_bind(cdev, false);
+}
+
+static int gs_bind_aoa(struct usb_composite_dev *cdev)
+{
+	return gs_bind(cdev, true);
 }
 
 static struct usb_composite_driver gserial_driver = {
@@ -244,39 +309,313 @@ static struct usb_composite_driver gserial_driver = {
 	.strings	= dev_strings,
 };
 
-static int __init init(void)
+struct aoa_event_list_node {
+	enum aoa_event_type type;
+	enum aoa_string_type str_type;
+	char *str;
+	struct list_head list;
+};
+
+DECLARE_WAIT_QUEUE_HEAD(aoa_waitqueue);
+struct aoa_event_list_node *first_aoa_event_node = NULL;
+struct aoa_event_list_node *last_aoa_event_node = NULL;
+struct aoa_event_list_node *next_aoa_event_node = NULL;
+
+static bool aoa_event_node_add(enum aoa_event_type type,
+			       enum aoa_string_type *str_type,
+			       char *str)
 {
-	/* We *could* export two configs; that'd be much cleaner...
-	 * but neither of these product IDs was defined that way.
-	 */
-	if (use_acm) {
+	struct aoa_event_list_node* new_node;
+	unsigned long flags;
+
+	new_node = kmalloc(sizeof(struct aoa_event_list_node), GFP_ATOMIC);
+	if (unlikely(new_node == NULL)) {
+		printk(KERN_ERR
+		       "Could not aquire memory for AOA event list node!\n");
+		return false;
+	}
+
+	new_node->type = type;
+	if (str_type != NULL)
+		new_node->str_type = *str_type;
+	new_node->str = str;
+
+	spin_lock_irqsave(&aoa_waitqueue.lock, flags);
+
+	if ((first_aoa_event_node != NULL)
+			&& (type == AOA_EVENT_CONNECTED_ACM)) {
+		struct aoa_event_list_node *node, *temp;
+		list_for_each_entry_safe(node, temp,
+					 &first_aoa_event_node->list,
+					 list) {
+			list_del(&node->list);
+			kfree(node->str);
+			kfree(node);
+		}
+		first_aoa_event_node = NULL;
+		next_aoa_event_node = NULL;
+	}
+
+	INIT_LIST_HEAD(&new_node->list);
+
+	if (first_aoa_event_node == NULL) {
+		first_aoa_event_node = new_node;
+		next_aoa_event_node = new_node;
+	} else
+		list_add(&new_node->list, &last_aoa_event_node->list);
+
+	if (next_aoa_event_node == NULL)
+		next_aoa_event_node = new_node;
+	last_aoa_event_node = new_node;
+
+	wake_up_locked(&aoa_waitqueue);
+
+	spin_unlock_irqrestore(&aoa_waitqueue.lock, flags);
+
+	return true;
+}
+
+static void aoa_event_add(enum aoa_event_type type)
+{
+	aoa_event_node_add(type, NULL, NULL);
+}
+
+static void aoa_str_received_event_add(enum aoa_string_type type, void *strbuf,
+				       size_t len)
+{
+	size_t str_mem_len = min(len + 1, (size_t) AOA_MAX_STR_SIZE);
+	char *str = kmalloc(str_mem_len, GFP_ATOMIC);
+
+	if (unlikely(str == NULL)) {
+		printk(KERN_ERR
+		       "Could not aquire memory for AOA string!\n");
+		kfree(str);
+		return;
+	}
+
+	memcpy(str, strbuf, str_mem_len - 1);
+	str[str_mem_len - 1] = 0;
+
+	if (unlikely(!aoa_event_node_add(AOA_EVENT_STRING_RECEIVED, &type,
+					 str)))
+		kfree(str);
+}
+
+static int aoa_open(struct inode *ip, struct file *fp)
+{
+	int ret;
+
+	if (atomic_xchg(&aoa_ctrl_open, true))
+		return -EBUSY;
+
+	ret = switch_mode(MODE_ACM);
+	if (ret == 0) {
+		spin_lock_irq(&aoa_waitqueue.lock);
+		next_aoa_event_node = first_aoa_event_node;
+		spin_unlock_irq(&aoa_waitqueue.lock);
+	} else {
+		atomic_set(&aoa_ctrl_open, false);
+	}
+
+	return ret;
+}
+
+static int aoa_release(struct inode *ip, struct file *fp)
+{
+	switch_mode(MODE_NONE);
+	atomic_set(&aoa_ctrl_open, false);
+	return 0;
+}
+
+static ssize_t aoa_read(struct file *file, char __user *buf, size_t len,
+			loff_t *ptr)
+{
+	ssize_t ret;
+
+	spin_lock_irq(&aoa_waitqueue.lock);
+
+	/* reading anything else than one single event is not supported */
+	if (unlikely((buf == NULL) || (len != sizeof(struct aoa_event)))) {
+		ret = -EINVAL;
+		goto done;
+	}
+
+	if (unlikely(wait_event_interruptible_exclusive_locked_irq(
+				aoa_waitqueue, next_aoa_event_node != NULL))) {
+		ret = -EINTR;
+		goto done;
+	}
+
+	if (next_aoa_event_node->str == NULL) {
+		ret = sizeof(enum aoa_event_type);
+		if (unlikely(copy_to_user(buf, &next_aoa_event_node->type,
+					  ret))) {
+			ret = -EFAULT;
+			goto done;
+		}
+	} else {
+		size_t str_mem_len = strlen(next_aoa_event_node->str) + 1;
+		struct aoa_event ev;
+		ret = sizeof(enum aoa_event_type)
+				+ sizeof(enum aoa_string_type)
+				+ str_mem_len;
+		ev.type = next_aoa_event_node->type;
+		ev.string.type = next_aoa_event_node->str_type;
+		memcpy(ev.string.str, next_aoa_event_node->str, str_mem_len);
+
+		if (unlikely(copy_to_user(buf, &ev, ret))) {
+			ret = -EFAULT;
+			goto done;
+		}
+	}
+
+	if (last_aoa_event_node == next_aoa_event_node)
+		next_aoa_event_node = NULL;
+	else
+		next_aoa_event_node = list_entry(next_aoa_event_node->list.next,
+						 struct aoa_event_list_node,
+						 list);
+
+done:
+	spin_unlock_irq(&aoa_waitqueue.lock);
+	return ret;
+}
+
+static long aoa_ioctl(struct file *fp, unsigned code, unsigned long value)
+{
+	switch (code) {
+	case AOA_IOCTL_SWITCH_TO_AOA:
+		return switch_mode(MODE_AOA);
+
+	case AOA_IOCTL_SWITCH_TO_ACM:
+		return switch_mode(MODE_ACM);
+
+	case AOA_IOCTL_RESET:
+		return reset_mode();
+
+	default:
+		return -ENOTTY;
+	}
+}
+
+static unsigned int aoa_poll(struct file *file, poll_table *wait)
+{
+	int ret;
+
+	poll_wait(file, &aoa_waitqueue, wait);
+	spin_lock_irq(&aoa_waitqueue.lock);
+	if (next_aoa_event_node == NULL)
+		ret = 0;
+	else
+		ret = POLLIN | POLLRDNORM;
+	spin_unlock_irq(&aoa_waitqueue.lock);
+
+	return ret;
+}
+
+static const struct file_operations aoa_ctrl_device_fops = {
+	.owner = THIS_MODULE,
+	.open = aoa_open,
+	.release = aoa_release,
+	.read = aoa_read,
+	.unlocked_ioctl = aoa_ioctl,
+	.poll = aoa_poll,
+};
+
+static struct miscdevice aoa_ctrl_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "aoa_ctrl",
+	.fops = &aoa_ctrl_device_fops,
+};
+
+static int switch_mode(enum gadget_mode new_mode)
+{
+	int ret;
+
+	mutex_lock(&mode_switch_mutex);
+
+	if (current_mode == new_mode) {
+		ret = 0;
+		goto done;
+	}
+
+	if (current_mode != MODE_NONE) {
+		usb_composite_unregister(&gserial_driver);
+		gserial_cleanup();
+	}
+
+	switch (new_mode) {
+	case MODE_NONE:
+		current_mode = MODE_NONE;
+		ret = 0;
+		goto done;
+
+	case MODE_ACM:
 		serial_config_driver.label = "CDC ACM config";
 		serial_config_driver.bConfigurationValue = 2;
 		device_desc.bDeviceClass = USB_CLASS_COMM;
-		device_desc.idProduct =
-				cpu_to_le16(GS_CDC_PRODUCT_ID);
-	} else if (use_obex) {
-		serial_config_driver.label = "CDC OBEX config";
-		serial_config_driver.bConfigurationValue = 3;
-		device_desc.bDeviceClass = USB_CLASS_COMM;
-		device_desc.idProduct =
-			cpu_to_le16(GS_CDC_OBEX_PRODUCT_ID);
-	} else {
-		serial_config_driver.label = "Generic Serial config";
+		device_desc.idVendor = cpu_to_le16(GS_ACM_VENDOR_ID);
+		device_desc.idProduct = cpu_to_le16(GS_ACM_PRODUCT_ID);
+		strings_dev[STRING_DESCRIPTION_IDX].s =
+				serial_config_driver.label;
+
+		ret = usb_composite_probe(&gserial_driver, gs_bind_acm);
+		if (ret != 0)
+			goto done;
+		break;
+
+	case MODE_AOA:
+		serial_config_driver.label = "Android Open Accessory config";
 		serial_config_driver.bConfigurationValue = 1;
 		device_desc.bDeviceClass = USB_CLASS_VENDOR_SPEC;
-		device_desc.idProduct =
-				cpu_to_le16(GS_PRODUCT_ID);
-	}
-	strings_dev[STRING_DESCRIPTION_IDX].s = serial_config_driver.label;
+		device_desc.idVendor = cpu_to_le16(GS_AOA_VENDOR_ID);
+		device_desc.idProduct = cpu_to_le16(GS_AOA_PRODUCT_ID);
+		strings_dev[STRING_DESCRIPTION_IDX].s =
+				serial_config_driver.label;
 
-	return usb_composite_probe(&gserial_driver, gs_bind);
+		ret = usb_composite_probe(&gserial_driver, gs_bind_aoa);
+		if (ret != 0)
+			goto done;
+		break;
+	};
+
+	current_mode = new_mode;
+
+done:
+	mutex_unlock(&mode_switch_mutex);
+	return ret;
+}
+
+static int reset_mode(void)
+{
+	int ret;
+
+	mutex_lock(&mode_switch_mutex);
+
+	if (current_mode == MODE_NONE) {
+		ret = 0;
+		goto done;
+	}
+
+	usb_composite_unregister(&gserial_driver);
+	gserial_cleanup();
+
+	ret = usb_composite_probe(&gserial_driver,
+			(current_mode == MODE_ACM) ? gs_bind_acm : gs_bind_aoa);
+
+done:
+	mutex_unlock(&mode_switch_mutex);
+	return ret;
+}
+
+static int __init init(void)
+{
+	return misc_register(&aoa_ctrl_device);
 }
 module_init(init);
 
 static void __exit cleanup(void)
 {
-	usb_composite_unregister(&gserial_driver);
-	gserial_cleanup();
+	misc_deregister(&aoa_ctrl_device);
 }
 module_exit(cleanup);

@@ -53,6 +53,7 @@ void gs_free_req(struct usb_ep *, struct usb_request *req);
 
 /* port setup/teardown is handled by gadget driver */
 int gserial_setup(struct usb_gadget *g, unsigned n_ports);
+int gserial_setup_ex(struct usb_gadget *g, unsigned n_ports, const char *tty_name);
 void gserial_cleanup(void);
 
 /* connect/disconnect is handled by individual functions */
@@ -60,8 +61,8 @@ int gserial_connect(struct gserial *, u8 port_num);
 void gserial_disconnect(struct gserial *);
 
 /* functions are bound to configurations by a config or gadget driver */
-int acm_bind_config(struct usb_configuration *c, u8 port_num);
-int gser_bind_config(struct usb_configuration *c, u8 port_num);
+int acm_bind_config(struct usb_configuration *c);
+int gser_bind_config(struct usb_configuration *c);
 int obex_bind_config(struct usb_configuration *c, u8 port_num);
 
 #endif /* __U_SERIAL_H */

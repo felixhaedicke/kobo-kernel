@@ -67,6 +67,8 @@ struct f_acm {
 
 	struct usb_cdc_line_coding	port_line_coding;	/* 8-N-1 etc */
 
+	u16 aoa_string_index;
+
 	/* SetControlLineState request -- CDC 1.1 section 6.2.14 (INPUT) */
 	u16				port_handshake_bits;
 #define ACM_CTRL_RTS	(1 << 1)	/* unused with full duplex */
@@ -310,6 +312,36 @@ static void acm_complete_set_line_coding(struct usb_ep *ep,
 	}
 }
 
+static void
+acm_aoa_set_string(struct usb_ep *ep, struct usb_request *req)
+{
+	struct f_acm *acm = req->context;
+	aoa_str_received_event_add((enum aoa_string_type) acm->aoa_string_index,
+				   req->buf, req->actual);
+}
+
+static bool acm_req_match(struct usb_function *f,
+			 const struct usb_ctrlrequest *ctrl,
+			 bool config0)
+{
+	if (config0) {
+		if (ctrl->bRequestType == (USB_DIR_OUT | USB_TYPE_VENDOR)) {
+			if (ctrl->bRequest == AOA_REQ_START) {
+				return true;
+			} else if (ctrl->bRequest == AOA_REQ_SEND_STRING) {
+				return true;
+			}
+		} else if (ctrl->bRequestType == (USB_DIR_IN | USB_TYPE_VENDOR)) {
+			if ((ctrl->bRequest == AOA_REQ_GET_PROTOCOL) && (le16_to_cpu(ctrl->wLength) == 2)) {
+				return true;
+			}
+		}
+
+		return false;
+	} else
+		return true;
+}
+
 static int acm_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 {
 	struct f_acm		*acm = func_to_acm(f);
@@ -319,6 +351,8 @@ static int acm_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 	u16			w_index = le16_to_cpu(ctrl->wIndex);
 	u16			w_value = le16_to_cpu(ctrl->wValue);
 	u16			w_length = le16_to_cpu(ctrl->wLength);
+
+	aoa_set_connected_acm(true);
 
 	/* composite driver infrastructure handles everything except
 	 * CDC class messages; interface activation uses set_alt().
@@ -369,6 +403,24 @@ static int acm_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 		break;
 
 	default:
+		if (ctrl->bRequestType == (USB_DIR_OUT | USB_TYPE_VENDOR)) {
+			if (ctrl->bRequest == AOA_REQ_START) {
+				aoa_event_add(AOA_EVENT_START_REQUESTED);
+				value = 0;
+			} else if (ctrl->bRequest == AOA_REQ_SEND_STRING) {
+				req->context = acm;
+				acm->aoa_string_index = w_index;
+				cdev->req->complete = acm_aoa_set_string;
+				value = w_length;
+			}
+		} else if (ctrl->bRequestType == (USB_DIR_IN | USB_TYPE_VENDOR)) {
+			if ((ctrl->bRequest == AOA_REQ_GET_PROTOCOL) && (w_length == 2)) {
+				((char *)cdev->req->buf)[0] = AOA_PROTOCOL_VERSION;
+				((char *)cdev->req->buf)[0] = 0;
+				value = 2;
+			}
+		}
+
 invalid:
 		VDBG(cdev, "invalid control req%02x.%02x v%04x i%04x l%d\n",
 			ctrl->bRequestType, ctrl->bRequest,
@@ -441,6 +493,12 @@ static void acm_disable(struct usb_function *f)
 	usb_ep_disable(acm->notify);
 	acm->notify->driver_data = NULL;
 }
+
+static void acm_disconnected(struct usb_function *f)
+{
+	aoa_set_connected_acm(false);
+}
+
 
 /*-------------------------------------------------------------------------*/
 
@@ -711,7 +769,6 @@ static inline bool can_support_cdc(struct usb_configuration *c)
 /**
  * acm_bind_config - add a CDC ACM function to a configuration
  * @c: the configuration to support the CDC ACM instance
- * @port_num: /dev/ttyGS* port this interface will use
  * Context: single threaded during gadget setup
  *
  * Returns zero on success, else negative errno.
@@ -720,7 +777,7 @@ static inline bool can_support_cdc(struct usb_configuration *c)
  * handle all the ones it binds.  Caller is also responsible
  * for calling @gserial_cleanup() before module unload.
  */
-int acm_bind_config(struct usb_configuration *c, u8 port_num)
+int acm_bind_config(struct usb_configuration *c)
 {
 	struct f_acm	*acm;
 	int		status;
@@ -763,13 +820,13 @@ int acm_bind_config(struct usb_configuration *c, u8 port_num)
 
 	spin_lock_init(&acm->lock);
 
-	acm->port_num = port_num;
+	acm->port_num = 0;
 
 	acm->port.connect = acm_connect;
 	acm->port.disconnect = acm_disconnect;
 	acm->port.send_break = acm_send_break;
 
-	acm->port.func.name = kasprintf(GFP_KERNEL, "acm%u", port_num);
+	acm->port.func.name = kasprintf(GFP_KERNEL, "acm%u", 1);
 	if (!acm->port.func.name) {
 		kfree(acm);
 		return -ENOMEM;
@@ -779,8 +836,10 @@ int acm_bind_config(struct usb_configuration *c, u8 port_num)
 	acm->port.func.bind = acm_bind;
 	acm->port.func.unbind = acm_unbind;
 	acm->port.func.set_alt = acm_set_alt;
+	acm->port.func.req_match = acm_req_match;
 	acm->port.func.setup = acm_setup;
 	acm->port.func.disable = acm_disable;
+	acm->port.func.disconnected = acm_disconnected;
 
 	status = usb_add_function(c, &acm->port.func);
 	if (status)

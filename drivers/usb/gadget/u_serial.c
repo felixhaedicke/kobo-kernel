@@ -1076,6 +1076,16 @@ gs_port_alloc(unsigned port_num, struct usb_cdc_line_coding *coding)
  */
 int gserial_setup(struct usb_gadget *g, unsigned count)
 {
+	return gserial_setup_ex(g, count, PREFIX);
+}
+
+/**
+ * gserial_setup_ex - gserial_setup function overload, which allows
+ * specifying a custom TTY device name and major ID
+ * @tty_name: TTY device
+ */
+int gserial_setup_ex(struct usb_gadget *g, unsigned count, const char *tty_name)
+{
 	unsigned			i;
 	struct usb_cdc_line_coding	coding;
 	int				status;
@@ -1089,7 +1099,7 @@ int gserial_setup(struct usb_gadget *g, unsigned count)
 
 	gs_tty_driver->owner = THIS_MODULE;
 	gs_tty_driver->driver_name = "g_serial";
-	gs_tty_driver->name = PREFIX;
+	gs_tty_driver->name = tty_name;
 	/* uses dynamically assigned dev_t values */
 
 	gs_tty_driver->type = TTY_DRIVER_TYPE_SERIAL;
