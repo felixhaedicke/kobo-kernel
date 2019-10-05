@@ -63,7 +63,7 @@
 
 enum chips { it87, it8712, it8716, it8718, it8720, it8721, it8728, it8732,
 	     it8771, it8772, it8781, it8782, it8783, it8786, it8790,
-	     it8792, it8603, it8620, it8622, it8628 };
+	     it8792, it8603, it8620, it8622, it8628, it8688 };
 
 static unsigned short force_id;
 module_param(force_id, ushort, 0);
@@ -157,6 +157,7 @@ static inline void superio_exit(int ioreg)
 #define IT8622E_DEVID 0x8622
 #define IT8623E_DEVID 0x8623
 #define IT8628E_DEVID 0x8628
+#define IT8688E_DEVID 0x8688
 #define IT87_ACT_REG  0x30
 #define IT87_BASE_REG 0x60
 
@@ -453,6 +454,15 @@ static const struct it87_devices it87_devices[] = {
 	},
 	[it8628] = {
 		.name = "it8628",
+		.suffix = "E",
+		.features = FEAT_NEWER_AUTOPWM | FEAT_12MV_ADC | FEAT_16BIT_FANS
+		  | FEAT_TEMP_OFFSET | FEAT_TEMP_PECI | FEAT_SIX_FANS
+		  | FEAT_IN7_INTERNAL | FEAT_SIX_PWM | FEAT_PWM_FREQ2
+		  | FEAT_SIX_TEMP | FEAT_VIN3_5V,
+		.peci_mask = 0x07,
+	},
+	[it8688] = {
+		.name = "it8688",
 		.suffix = "E",
 		.features = FEAT_NEWER_AUTOPWM | FEAT_12MV_ADC | FEAT_16BIT_FANS
 		  | FEAT_TEMP_OFFSET | FEAT_TEMP_PECI | FEAT_SIX_FANS
@@ -2461,6 +2471,8 @@ static int __init it87_find(int sioaddr, unsigned short *address,
 		break;
 	case IT8628E_DEVID:
 		sio_data->type = it8628;
+	case IT8688E_DEVID:
+		sio_data->type = it8688;
 		break;
 	case 0xffff:	/* No device at all */
 		goto exit;
