@@ -2425,9 +2425,9 @@ static int __init it87_find(int sioaddr, unsigned short *address,
 	case IT8732F_DEVID:
 		sio_data->type = it8732;
 		break;
-	case IT8792E_DEVID:
+	/*case IT8792E_DEVID:
 		sio_data->type = it8792;
-		break;
+		break;*/
 	case IT8771E_DEVID:
 		sio_data->type = it8771;
 		break;
